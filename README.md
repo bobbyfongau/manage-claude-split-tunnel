@@ -61,6 +61,46 @@ handle config expiry, rebuilds, and "works in Terminal but not Warp".
 - sing-box ≥1.11 uses `endpoints`, not `outbounds`, for WireGuard
 - VPN provider WireGuard configs often **expire** — that's the most common later failure
 
+## Note to other agents (Codex CLI, ChatGPT desktop, etc.)
+
+If you're a different AI tool reading this repo because *you're* the one
+region-blocked — don't port these commands literally. `settings.json → env`,
+`/opt/homebrew` vs `/usr/local`, and `sing-box`'s config schema are Claude Code
+and macOS/Homebrew specifics. What should transfer is the **pattern**:
+
+1. **A region block is not an auth failure.** Confirm it against your own
+   provider's real API endpoint, expecting the specific "reachable but wrong
+   method" code for that endpoint (Anthropic's is `405` on `POST /v1/messages`
+   hit with `GET` — look up your own provider's equivalent, don't assume 405).
+   If you get that code, the network is fine and this whole pattern doesn't apply.
+2. **Fix your own process, not the whole machine.** Find where *you* read your
+   own startup environment or config — a CLI tool (Codex CLI included) most
+   likely reads `HTTPS_PROXY`/`HTTP_PROXY` from its process env at launch, or
+   has its own settings file. A `.zshrc`/`.bashrc` export only reaches terminal
+   launches — it won't help a Dock icon, Spotlight, or Warp-style launcher that
+   starts you without sourcing the shell profile. Find your equivalent of
+   `settings.json`, don't rely on the shell.
+3. **A GUI app is a different mechanism, not a bigger version of the same one.**
+   ChatGPT desktop won't read a CLI env var or config file at all. Electron/
+   native macOS apps generally pick up the **OS-level network proxy** (System
+   Settings → Network → Proxies) automatically instead. That's a real tradeoff,
+   not a free upgrade: it also routes Safari, Mail, and anything else that
+   honors the system proxy. Say so explicitly and get it confirmed rather than
+   flipping it silently — don't assume the blast radius is welcome.
+4. **Reuse the tunnel, don't stand up a second one.** If `sing-box` is already
+   running on `127.0.0.1:7890` for Claude Code, point your own proxy setting at
+   that same port instead of provisioning another WireGuard instance.
+5. **Never let the raw WireGuard file pass through chat.** Ask the user for the
+   *file path*, read the private key from disk yourself, mask it in anything
+   you print. This one isn't tool-specific — it holds for any agent doing this
+   kind of setup.
+6. **Env is almost always read once, at process startup.** After wiring in a
+   proxy, fully quit and relaunch the tool being fixed — a session that was
+   already running when you made the change won't pick it up.
+7. **The VPN config will expire.** Whatever you build, give it (or the human)
+   an explicit "rotate the config" step — don't treat first-run success as done
+   forever.
+
 ## License
 
 MIT

@@ -217,3 +217,10 @@ mask it and say which file it went into.
 Written for PureVPN Singapore + macOS/Homebrew, but nothing here is provider-specific:
 any WireGuard config works, and `sing-box` runs on Linux too. Replace the
 `<placeholders>` with your own values.
+
+This skill only actions **Claude Code** — `settings.json → env` is Claude-specific
+plumbing. It does not extend to Codex CLI, ChatGPT desktop, or any other tool on
+this machine; each of those needs its own equivalent of steps 2–5 above, built for
+how *that* tool reads its own config. [README.md](README.md) has a "Note to other
+agents" section for exactly that — point another agent there rather than trying to
+replicate its fix here.
