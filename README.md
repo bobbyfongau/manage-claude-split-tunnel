@@ -21,10 +21,9 @@ curl -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/v1/messages
 
 ## What it does
 
-Runs a local [`sing-box`](https://sing-box.sagernet.org/) proxy to an allowed region —
-over OpenVPN via a [gluetun](https://github.com/qdm12/gluetun) container (static VPN
-username/password, never expires, no `sudo`) or over WireGuard if your provider's
-configs don't expire — and points **only Claude Code** at it via `settings.json` → `env`.
+Runs a local [`sing-box`](https://sing-box.sagernet.org/) proxy over WireGuard to an
+allowed region (a provider whose manual WireGuard keys don't expire — Surfshark, Mullvad,
+Proton, AirVPN, IVPN, or your own VPS) and points **only Claude Code** at it via `settings.json` → `env`.
 Everything else on your machine keeps its normal route — which matters if your local
 network reaches sites the VPN can't.
 
@@ -41,10 +40,10 @@ itself, so that layer works from **any** launcher.
 
 ## Before you start
 
-1. **A VPN account** — any provider gluetun supports (PureVPN, NordVPN, Mullvad, Proton, …)
-   with OpenVPN username/password, or any non-expiring WireGuard config file
-2. **macOS + Homebrew** — the commands assume it (sing-box runs on Linux too; adjust paths).
-   The OpenVPN path adds `colima` + `docker` (installed by the skill, no admin password)
+1. **A VPN that issues non-expiring manual WireGuard configs** — Surfshark, Mullvad,
+   Proton, AirVPN, IVPN, or your own VPS. Not PureVPN (15-minute configs) and not
+   CyberGhost (WireGuard only inside its app)
+2. **macOS + Homebrew** — the commands assume it (sing-box runs on Linux too; adjust paths)
 3. **Install it while Claude still works.** ⚠️ Chicken-and-egg: if Claude is already
    blocked it can't run, so the skill can't trigger. Either install it *before* you
    travel, or follow the steps in [SKILL.md](SKILL.md) by hand the first time — it's
@@ -113,8 +112,10 @@ and macOS/Homebrew specifics. What should transfer is the **pattern**:
 - `ECONNREFUSED 127.0.0.1:7890` means sing-box itself is stopped, nothing else —
   `brew services start sing-box`. Deleting the proxy setting to "fix" it only hides
   the problem until the next blocked network (this happened on day one).
-- PureVPN WireGuard configs expire after **15 minutes** (24 h with a paid add-on) — use
-  OpenVPN there; the skill runs it in gluetun so nothing on the Mac needs root
+- PureVPN WireGuard configs expire after **15 minutes** (24 h with a paid add-on);
+  CyberGhost has no manual WireGuard at all — pick a provider with permanent keys
+- Inside Claude Code every shell command already inherits the proxy env, so a plain
+  `curl ifconfig.me` shows the tunnel exit, not your network's — use `--noproxy '*'`
 
 ## License
 
