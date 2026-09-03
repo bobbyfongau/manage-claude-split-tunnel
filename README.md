@@ -26,6 +26,11 @@ allowed region, and points **only Claude Code** at it via `settings.json` → `e
 Everything else on your machine keeps its normal route — which matters if your local
 network reaches sites the VPN can't.
 
+**Fail-safe:** the proxy uses the tunnel while it is healthy and drops to a direct
+connection by itself when the tunnel is dead (expired config, VPN outage). So on a
+network that is not region-blocked, Claude keeps working even with a dead tunnel — you
+never have to remove the proxy setting when you're not travelling.
+
 ## Why `settings.json`, not your shell
 
 A `claude()` wrapper in `.zshrc` only works in Terminal. Warp and other launchers
@@ -100,6 +105,11 @@ and macOS/Homebrew specifics. What should transfer is the **pattern**:
 7. **The VPN config will expire.** Whatever you build, give it (or the human)
    an explicit "rotate the config" step — don't treat first-run success as done
    forever.
+
+- `ECONNREFUSED 127.0.0.1:7890` means sing-box itself is stopped, nothing else —
+  `brew services start sing-box`. Deleting the proxy setting to "fix" it only hides
+  the problem until the next blocked network (this happened on day one).
+- A short-lived WireGuard config expires the same day. Extend its duration before downloading.
 
 ## License
 

@@ -1,11 +1,11 @@
 ---
 name: manage-claude-split-tunnel
-description: Diagnose and repair Claude Code's connection when it fails from a Hong Kong / China network — "API Error 403 Request not allowed", "Please run /login", works in Terminal but not Warp, or Claude works but gitee/mainland sites don't. Also sets up or rebuilds the sing-box split tunnel that sends ONLY Claude through PureVPN Singapore while everything else goes direct, and rotates the WireGuard config when it expires.
+description: Diagnose and repair Claude Code's connection when it fails from a Hong Kong / China network — "API Error 403 Request not allowed", "Please run /login", "ECONNREFUSED 127.0.0.1:7890", works in Terminal but not Warp, or Claude works but gitee/mainland sites don't. Also sets up or rebuilds the sing-box split tunnel that sends ONLY Claude through PureVPN Singapore (falling back to a direct connection by itself when the tunnel is dead) while everything else goes direct, and rotates the WireGuard config when it expires.
 ---
 
 # Manage Claude split tunnel
 
-Your network reaches mainland China but **Anthropic region-blocks his HK IP**.
+Your network reaches mainland China but **Anthropic region-blocks your IP**.
 The reverse is also true of a full VPN. This skill owns that conflict.
 
 **The single most important fact: `403 Request not allowed` + "Please run /login"
@@ -17,21 +17,33 @@ Never run `/login` for it — it cannot help and wastes a re-auth.
 - `MODE`: `diagnose` (default) | `rotate-config` | `rebuild`
 - `PROXY_PORT`: `7890` (local mixed HTTP+SOCKS inbound)
 - `WG_SOURCE`: fresh WireGuard config from https://my.purevpn.com/v2/dashboard/manual-config
-- `$PREFIX`: Homebrew prefix — **run `brew --prefix` first, every time, on every
-  machine.** Apple Silicon → `/opt/homebrew`; Intel → `/usr/local`. All paths below
-  are written as `$PREFIX/...` — resolve it before using them literally. Getting
-  this wrong is the most likely first-run failure on an Intel Mac (confirmed on a
-  MacBookPro13,3, which is `/usr/local`, not the `/opt/homebrew` you'd assume).
 
 ## Architecture (why it's built this way)
 
 ```
-Claude Code ──HTTPS_PROXY──> sing-box 127.0.0.1:7890 ──WireGuard──> PureVPN SG
-everything else ─────────────────────────────────────────────────> direct (China OK)
+Claude Code ──HTTPS_PROXY──> sing-box 127.0.0.1:7890 ─┬─ wg-sg  (WireGuard → PureVPN SG)  preferred
+                                                      └─ direct  fallback, automatic when the tunnel is dead
+everything else ──────────────────────────────────────────────────> direct (China OK)
+127.0.0.1:7891 = tunnel-only test port (used by vpncheck; never point Claude at it)
 ```
 
+- **The proxy is fail-safe (since 2026-09-03).** `route.final` is a `urltest`
+  group `[wg-sg, direct]` with a 30 s tolerance: it uses the tunnel while the
+  tunnel passes a health check every minute, and drops to `direct` on its own the
+  moment it fails. A dead or expired tunnel therefore no longer strands Claude on
+  networks that are not region-blocked (phone hotspot, a router-level VPN).
+  **Leave the `env` block and sing-box on permanently — that is the design.** The
+  only thing that still strands Claude is sing-box itself being stopped, which
+  shows up as `ECONNREFUSED 127.0.0.1:7890`.
+- **Fallback is sticky.** Once the group has dropped to `direct` it stays there
+  until sing-box restarts (rotate-config restarts it anyway). `vpncheck` showing
+  `tunnel: ALIVE` + `claude via: DIRECT` → `brew services restart sing-box`.
+- **`$PREFIX` = `brew --prefix`, resolve it before using any path on a new
+  machine.** Apple Silicon → `/opt/homebrew`; Intel → `/usr/local`. All paths below
+  are written as `$PREFIX/...`. Getting this wrong is the most likely first-run
+  failure on an Intel Mac (confirmed on a MacBookPro13,3, which is `/usr/local`).
 - **sing-box runs userspace WireGuard.** It changes *no* system routing, so it
-  physically cannot break Your connectivity. Safe to restart at any time.
+  physically cannot break your connectivity. Safe to restart at any time.
 - **The proxy is set in `settings.json` → `env`, not the shell.** This is the whole
   point: a `.zshrc` function only works in Terminal. Warp launches Claude without
   it and gets the 403. Claude Code reads `settings.json` itself, so the env layer
@@ -43,26 +55,34 @@ everything else ─────────────────────�
 
 1. Run `vpncheck` (defined in `~/.zshrc`). Healthy output:
    ```
-   sing-box: UP
-   exit IP : <your-vpn-exit-ip>     (PureVPN SG, Datacamp Limited)
-   claude  : 405               (405 = reachable; 403 = NOT going through the tunnel)
+   sing-box  : UP
+   direct IP : <your-direct-ip>               (whatever the Wi-Fi gives)
+   tunnel    : ALIVE (exit <your-vpn-exit-ip>)  (PureVPN SG, Datacamp Limited)
+   claude via: TUNNEL
+   claude    : 405   (405 = OK, 403 = region-blocked, 000 = dead)
    ```
 2. Match the symptom:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `claude: 403` | Traffic bypassing the tunnel | Check `settings.json` → `env` (step 3) |
-| `sing-box: DOWN` | Service not running | `brew services restart sing-box` |
-| `sing-box: UP`, `exit IP` blank | **WireGuard config expired** — the usual culprit | `MODE=rotate-config` |
+| `ECONNREFUSED 127.0.0.1:7890`, `OAuth error: connect ECONNREFUSED`, `sing-box: DOWN` | sing-box service stopped (it never stops by itself; someone ran `brew services stop`) | `brew services start sing-box`, then fully restart Claude. **Do not delete the `env` block** — that was the 2026-09-03 mistake |
+| `tunnel: DEAD`, `claude via: DIRECT` | **WireGuard config expired** — the usual culprit. Claude still works on non-blocked networks, 403 on your blocked home Wi-Fi | `MODE=rotate-config` |
+| `tunnel: ALIVE`, `claude via: DIRECT` | Group stuck on fallback after a blip (sticky by design) | `brew services restart sing-box` |
+| `claude: 403` with `claude via: TUNNEL` | PureVPN exit itself refused (rare) | Download a different Singapore config |
+| `claude: 403`, `vpncheck` healthy | Claude not using the proxy: `env` missing (step 3), or that window started before the setting existed | Fix `env`, fully restart Claude |
 | Works in Terminal, not Warp | Fix was only in `.zshrc` | Move it to `settings.json` → `env` |
-| Claude fine, gitee/openLuat dead | Router VPN (GSL) is on | Switch Wi-Fi to AX3000_5G |
+| Claude fine, mainland sites dead | A router-level VPN is on | Switch back to the non-VPN Wi-Fi |
+| Claude works direct on a phone hotspot | mobile data is not region-blocked | Nothing to fix — the fallback is doing its job |
 
 3. Verify the env layer is actually in place:
    ```bash
    python3 -c "import json;print(json.load(open('~/.claude-config/settings.json'))['env'])"
    ```
    Must contain `HTTPS_PROXY`, `HTTP_PROXY` = `http://127.0.0.1:7890`, and
-   `NO_PROXY` including `127.0.0.1` (or the local Threadboard on :<your-local-port> breaks).
+   `NO_PROXY` including `127.0.0.1` (or a local service on :<your-local-port> breaks).
+   Also `readlink ~/.claude/settings.json` must print
+   `~/.claude-config/settings.json`. Empty output = the symlink was
+   replaced by a plain file (see Gotchas) and edits are landing in the wrong file.
 
 4. **The definitive test** — strips the proxy from the environment *and* skips
    `.zshrc`, so it reproduces the exact Warp condition:
@@ -127,7 +147,9 @@ Singapore range (`<your provider's range>`) — `dig +short <endpoint-host>`.
 PureVPN WireGuard configs **expire** (see the countdown above). This is the most
 likely future failure.
 
-1. Download a **Singapore** WireGuard config from `WG_SOURCE` (above).
+1. Download a **Singapore** WireGuard config from `WG_SOURCE` (above) —
+   **after clicking *Extend WireGuard Configuration Time***. The default
+   15-minute config installed on 2026-09-03 was dead the same afternoon.
 2. Patch the live config in place — never retype secrets, never echo the key:
    ```bash
    python3 - <<'PY'
@@ -151,40 +173,86 @@ likely future failure.
    brew services restart sing-box && sleep 5 && vpncheck
    ```
 3. Mirror it to the backup at `~/.config/sing-box/config.json`, `chmod 600` both.
+4. `vpncheck` must now show `tunnel    : ALIVE` **and** `claude via: TUNNEL`.
 
 ## Steps — MODE=rebuild (new machine, or from scratch)
 
 0. `brew --prefix` → set `$PREFIX` for every path below. Don't assume
    `/opt/homebrew` — Intel Macs are `/usr/local`.
 1. `brew install sing-box`
-2. Write `$PREFIX/etc/sing-box/config.json`: a `mixed` inbound on
-   `127.0.0.1:7890`, one `wireguard` endpoint (sing-box ≥1.11 uses `endpoints`,
-   not `outbounds`), `"route": {"final": "wg-sg"}`. Build it from the `.conf`
-   with the script above. `chmod 600`.
+2. Write `$PREFIX/etc/sing-box/config.json` (`chmod 600`; a pristine copy
+   lives at `~/.config/sing-box/config.json`). Shape — the key material comes
+   from the `.conf` via the rotate-config script:
+   - `inbounds`: `mixed` on `127.0.0.1:7890` tag `local-proxy`, and `mixed` on
+     `127.0.0.1:7891` tag `wg-only`
+   - `endpoints`: one `wireguard` endpoint tag `wg-sg` (sing-box ≥1.11 uses
+     `endpoints`, not `outbounds`), `"system": false`, `"mtu": 1408`
+   - `outbounds`: `{"type":"urltest","tag":"auto","outbounds":["wg-sg","direct"],
+     "url":"https://www.gstatic.com/generate_204","interval":"1m","tolerance":30000}`
+     and `{"type":"direct","tag":"direct"}`
+   - `route`: `{"rules":[{"inbound":["wg-only"],"outbound":"wg-sg"}],"final":"auto"}`
 3. `sing-box check -c <file>` — **always validate before starting.**
 4. `brew services start sing-box` (installs a LaunchAgent → survives reboot).
 5. Add the `env` block to `settings.json` (see Gotchas — it's a symlink).
-6. **Add `vpncheck` to `~/.zshrc` if it isn't already there** — `MODE=diagnose`
-   step 1 assumes it exists, but a fresh machine has nothing. Append:
+6. **Add `vpncheck` to `~/.zshrc` if it isn't there** — a fresh machine has
+   nothing, and `MODE=diagnose` assumes it. Append:
    ```bash
    vpncheck() {
-     pgrep -q sing-box && echo "sing-box: UP" || echo "sing-box: DOWN"
-     exit_ip=$(curl -s --max-time 5 -x http://127.0.0.1:7890 https://ifconfig.me)
-     echo "exit IP : ${exit_ip:-<none>}"
-     code=$(curl -s --max-time 5 -x http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/messages)
-     echo "claude  : ${code}               (405 = reachable; 403 = NOT going through the tunnel)"
+     local direct tunnel proxied code
+     if lsof -nP -iTCP:7890 -sTCP:LISTEN >/dev/null 2>&1; then echo "sing-box  : UP"
+     else echo "sing-box  : DOWN   -> brew services start sing-box"; return 1; fi
+     direct=$(curl -s -m 8 https://api.ipify.org)
+     tunnel=$(curl -s -m 12 -x http://127.0.0.1:7891 https://api.ipify.org)
+     proxied=$(curl -s -m 12 -x http://127.0.0.1:7890 https://api.ipify.org)
+     code=$(curl -s -m 15 -x http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/messages)
+     echo "direct IP : ${direct:-?}"
+     if [ -n "$tunnel" ]; then echo "tunnel    : ALIVE (exit $tunnel)"
+     else echo "tunnel    : DEAD   -> PureVPN config expired: get a new one (skill: rotate-config)"; fi
+     if [ -z "$proxied" ]; then echo "claude via: NOTHING (proxy broken)"
+     elif [ "$proxied" = "$tunnel" ]; then echo "claude via: TUNNEL"
+     else echo "claude via: DIRECT (fallback)$([ -n "$tunnel" ] && echo '  -> tunnel is back: brew services restart sing-box')"; fi
+     echo "claude    : $code   (405 = OK, 403 = region-blocked, 000 = dead)"
    }
    ```
 7. **Fully quit and reopen Claude Code** — in Warp, Terminal, or wherever it runs.
    `settings.json` → `env` is read at startup, so a session already running keeps
    the old environment and keeps failing with 403. `/exit` then relaunch.
-   (A session that was already running *before* the `env` block was added will
-   pick up the new proxy on its **next** restart — no action needed if you're
-   about to quit and relaunch anyway.)
 8. Run the definitive test from `MODE=diagnose` step 4.
+
+## Steps — MODE=teardown (only if the tunnel is genuinely no longer wanted)
+
+"Not travelling" is not a reason: the proxy falls back to direct by itself. If it
+really must go, do **both** halves, in this order:
+
+1. Remove the `env` block with a **targeted edit on the real path**
+   `~/.claude-config/settings.json` (Edit tool, or `jq` writing back to that same
+   path). Never `jq … > tmp && mv tmp ~/.claude/settings.json` — that replaces
+   the symlink.
+2. `brew services stop sing-box`
+
+Doing only one half is exactly the 2026-09-03 incident.
 
 ## Gotchas that cost real time
 
+- **Never `mv` a file over `~/.claude/settings.json`.** On 2026-09-03
+  `jq 'del(.env)' … > /tmp/x && mv /tmp/x ~/.claude/settings.json` replaced the
+  symlink with a plain file. From then on `/model`, `/effort` and `/config` wrote
+  to a detached copy while `~/.claude-config` (and every other Mac) silently kept
+  the old one. Check: `readlink ~/.claude/settings.json`. Repair:
+  ```bash
+  jq -n --slurpfile a ~/.claude/settings.json --slurpfile b ~/.claude-config/settings.json \
+    '{env: $b[0].env} + $a[0]' > merged.json && jq -e . merged.json >/dev/null \
+  && cp merged.json ~/.claude-config/settings.json \
+  && mv ~/.claude/settings.json ~/.claude/settings.json.detached \
+  && ln -s ~/.claude-config/settings.json ~/.claude/settings.json
+  ```
+- **Removing the `env` block is never the fix for a dead tunnel.** It only
+  "works" on networks that are not region-blocked and leaves Claude dead again on
+  your blocked home Wi-Fi. Fix the tunnel (rotate-config) — or do nothing: the proxy falls back
+  on its own.
+- **`ECONNREFUSED 127.0.0.1:7890` means sing-box is stopped, nothing else.** It
+  never stops by itself (launchd keeps it alive); someone ran `brew services stop`.
+  `brew services start sing-box` and move on.
 - **`~/.claude/settings.json` is a symlink** to `~/.claude-config/settings.json`.
   Edits must target the real path or they're refused.
 - **A PreToolUse hook blocks whole-file `Write` to settings.json** (it once wiped
@@ -216,11 +284,5 @@ mask it and say which file it went into.
 
 Written for PureVPN Singapore + macOS/Homebrew, but nothing here is provider-specific:
 any WireGuard config works, and `sing-box` runs on Linux too. Replace the
-`<placeholders>` with your own values.
-
-This skill only actions **Claude Code** — `settings.json → env` is Claude-specific
-plumbing. It does not extend to Codex CLI, ChatGPT desktop, or any other tool on
-this machine; each of those needs its own equivalent of steps 2–5 above, built for
-how *that* tool reads its own config. [README.md](README.md) has a "Note to other
-agents" section for exactly that — point another agent there rather than trying to
-replicate its fix here.
+`<placeholders>` with your own values. The `~/.claude-config` symlink gotchas apply
+only if you keep `settings.json` in a synced repo like the author does.
