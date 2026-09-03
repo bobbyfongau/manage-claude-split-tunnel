@@ -112,8 +112,8 @@ directly. Pasting a config into chat writes a live private key into the transcri
 2. Patch the live config in place — never retype secrets, never echo the key:
    ```bash
    python3 - <<'PY'
-   import json
-   src = "~/Downloads/sg-sng.conf"   # <-- new file
+   import json, os
+   src = os.path.expanduser("~/Downloads/sg-sng.conf")   # <-- new file
    kv = {}
    for line in open(src):
        line = line.strip()
