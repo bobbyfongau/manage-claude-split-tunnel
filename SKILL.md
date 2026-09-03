@@ -17,6 +17,11 @@ Never run `/login` for it — it cannot help and wastes a re-auth.
 - `MODE`: `diagnose` (default) | `rotate-config` | `rebuild`
 - `PROXY_PORT`: `7890` (local mixed HTTP+SOCKS inbound)
 - `WG_SOURCE`: fresh WireGuard config from https://my.purevpn.com/v2/dashboard/manual-config
+- `$PREFIX`: Homebrew prefix — **run `brew --prefix` first, every time, on every
+  machine.** Apple Silicon → `/opt/homebrew`; Intel → `/usr/local`. All paths below
+  are written as `$PREFIX/...` — resolve it before using them literally. Getting
+  this wrong is the most likely first-run failure on an Intel Mac (confirmed on a
+  MacBookPro13,3, which is `/usr/local`, not the `/opt/homebrew` you'd assume).
 
 ## Architecture (why it's built this way)
 
@@ -101,7 +106,7 @@ Endpoint=<endpoint-host>:51820
 PersistentKeepalive=21
 ```
 
-Field mapping into `/opt/homebrew/etc/sing-box/config.json` (the script below does
+Field mapping into `$PREFIX/etc/sing-box/config.json` (the script below does
 this automatically — the table is for when it needs checking by hand):
 
 | WireGuard `.conf` | sing-box |
@@ -134,7 +139,7 @@ likely future failure.
        if "=" in line and not line.startswith("["):
            k, v = line.split("=", 1); kv[k.strip().lower()] = v.strip()
    host, port = kv["endpoint"].rsplit(":", 1)
-   dst = "/opt/homebrew/etc/sing-box/config.json"
+   dst = "$PREFIX/etc/sing-box/config.json"   # <-- resolve $PREFIX (brew --prefix) first
    cfg = json.load(open(dst)); ep = cfg["endpoints"][0]
    ep["address"] = [kv["address"] + "/32"]
    ep["private_key"] = kv["privatekey"]
@@ -149,18 +154,34 @@ likely future failure.
 
 ## Steps — MODE=rebuild (new machine, or from scratch)
 
+0. `brew --prefix` → set `$PREFIX` for every path below. Don't assume
+   `/opt/homebrew` — Intel Macs are `/usr/local`.
 1. `brew install sing-box`
-2. Write `/opt/homebrew/etc/sing-box/config.json`: a `mixed` inbound on
+2. Write `$PREFIX/etc/sing-box/config.json`: a `mixed` inbound on
    `127.0.0.1:7890`, one `wireguard` endpoint (sing-box ≥1.11 uses `endpoints`,
    not `outbounds`), `"route": {"final": "wg-sg"}`. Build it from the `.conf`
    with the script above. `chmod 600`.
 3. `sing-box check -c <file>` — **always validate before starting.**
 4. `brew services start sing-box` (installs a LaunchAgent → survives reboot).
 5. Add the `env` block to `settings.json` (see Gotchas — it's a symlink).
-6. **Fully quit and reopen Claude Code** — in Warp, Terminal, or wherever it runs.
+6. **Add `vpncheck` to `~/.zshrc` if it isn't already there** — `MODE=diagnose`
+   step 1 assumes it exists, but a fresh machine has nothing. Append:
+   ```bash
+   vpncheck() {
+     pgrep -q sing-box && echo "sing-box: UP" || echo "sing-box: DOWN"
+     exit_ip=$(curl -s --max-time 5 -x http://127.0.0.1:7890 https://ifconfig.me)
+     echo "exit IP : ${exit_ip:-<none>}"
+     code=$(curl -s --max-time 5 -x http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/messages)
+     echo "claude  : ${code}               (405 = reachable; 403 = NOT going through the tunnel)"
+   }
+   ```
+7. **Fully quit and reopen Claude Code** — in Warp, Terminal, or wherever it runs.
    `settings.json` → `env` is read at startup, so a session already running keeps
    the old environment and keeps failing with 403. `/exit` then relaunch.
-7. Run the definitive test from `MODE=diagnose` step 4.
+   (A session that was already running *before* the `env` block was added will
+   pick up the new proxy on its **next** restart — no action needed if you're
+   about to quit and relaunch anyway.)
+8. Run the definitive test from `MODE=diagnose` step 4.
 
 ## Gotchas that cost real time
 
